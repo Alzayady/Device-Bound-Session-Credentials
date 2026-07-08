@@ -133,9 +133,15 @@ old persisted DBSC sessions before a fresh run.
 
 ### ❌ Doesn't work on this setup
 - **`/api/protected` shows `authenticated=false`.** The device-bound cookie is delivered
-  to Chrome's own `/dbsc/refresh` requests, but **not** to our page's requests (tried both
-  `fetch()` and a top-level navigation; not a SameSite/Domain issue). Chrome keeps
+  to Chrome's own `/dbsc/refresh` requests, but **not** to our page's requests. Chrome keeps
   re-refreshing without ever treating the bound cookie as "settled" for app requests.
+
+  **Ruled out (things we tried that made no difference):** `fetch()` vs. top-level
+  navigation; `SameSite=Lax` vs. `Strict`; `Domain=localhost` vs. host-only; and the strict
+  **`__Host-` prefix** (`Secure` + `HttpOnly`, no `Domain`, per
+  [RFC 6265bis §4.1.3.2](https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-05#section-4.1.3.2)).
+  None changed delivery — which is strong evidence the blocker is **not** a cookie-attribute
+  problem but the testing path below.
 
 ### Why (best current understanding)
 DBSC's *public* rollout is Windows-first; **macOS is still "manual testing"**, which
@@ -170,7 +176,10 @@ production/CT cert** and hardware keys, or on **Windows** where DBSC is generall
 8. **Challenges should be short & alphanumeric** — Chrome is picky.
 9. **Reject unknown sessions with `404`** or persisted sessions cause an infinite
    refresh storm after a server restart.
-10. **Bound cookies need `Domain=`** to match the domain-based session scope.
+10. **`Domain=` is *not* required for the bound cookie.** We use it to mirror the
+    reference server, but a host-only cookie — including the strict `__Host-` prefix
+    (`Secure`, no `Domain`) — works fine for the handshake. (An earlier version of this
+    list wrongly claimed `Domain=` was required; it isn't.)
 
 ---
 
