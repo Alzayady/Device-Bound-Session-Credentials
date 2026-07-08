@@ -176,10 +176,11 @@ production/CT cert** and hardware keys, or on **Windows** where DBSC is generall
 8. **Challenges should be short & alphanumeric** — Chrome is picky.
 9. **Reject unknown sessions with `404`** or persisted sessions cause an infinite
    refresh storm after a server restart.
-10. **`Domain=` is *not* required for the bound cookie.** We use it to mirror the
-    reference server, but a host-only cookie — including the strict `__Host-` prefix
-    (`Secure`, no `Domain`) — works fine for the handshake. (An earlier version of this
-    list wrongly claimed `Domain=` was required; it isn't.)
+10. **`Domain=` is *not* required for the bound cookie.** We use a **host-only** cookie with
+    `Secure` + `HttpOnly` (matching the production `dbsc-php` lib). The two references
+    disagree here — `drubery` uses `Domain=`, `dbsc-php` uses host-only + `Secure` +
+    `HttpOnly` — and both handshake fine. (An earlier version of this list wrongly claimed
+    `Domain=` was required; it isn't.)
 
 ---
 
@@ -207,7 +208,7 @@ which Chrome silently ignores. The docs never said that.)
 |---|-------------|--------------|-----|
 | 1 | Emits `Secure-Session-Registration` on the **login response** (`200` + a long-lived cookie). | Emits it on a **form-POST → `303` redirect** (the *Start session* button). | A hello-world has no real login. A button submitting a form is the simplest trigger, and the `303`-redirect shape (matching the reference test server) is what reliably makes Chrome start registration. Functionally it's still "a POST whose response carries the header." |
 | 2 | Registration header example: `(ES256 RS256); path="/StartSession"` — **no `challenge`**. | We add `challenge="…"` and `authorization="…"`. | The `challenge` is echoed back in the JWT's `jti`, which is how a real server does anti-replay; both are permitted by the [spec](https://w3c.github.io/webappsec-dbsc/). Harmless to include. |
-| 3 | Bound cookie: `Max-Age=600` (10 min), `SameSite=Lax`, `Secure`. | `Max-Age=20`, `SameSite=Strict`, no `Secure`. | 20s makes the auto-refresh observable within seconds. `Strict`/no-`Secure` matched the reference server; the docs note `Secure` isn't strictly required. |
+| 3 | Bound cookie: `Max-Age=600` (10 min), `SameSite=Lax`, `Secure`. | `Max-Age=20`, `SameSite=Strict`, `Secure`, `HttpOnly`, host-only (no `Domain`). | 20s makes the auto-refresh observable within seconds. `Secure`+`HttpOnly`+host-only matches the production lib [`report-uri/dbsc-php`](https://github.com/report-uri/dbsc-php). |
 | 4 | **No enablement steps** (it documents shipped/production behavior). | Requires Chrome flags: **`Enabled – For developers`**, **UnexportableKeyService**, software-keys. | On macOS, DBSC is still "manual testing"; those flags (from the [testing wiki](https://github.com/w3c/webappsec-dbsc/wiki/Testing-early-versions-of-DBSC)) skip the Origin-Trial-token check and let the OS generate the device key. Without them Chrome silently does nothing on `localhost`. |
 | 5 | Describes an optional **long-lived fallback cookie** for when refresh fails. | Not implemented. | Out of scope for a minimal demo. |
 | 6 | Barely specifies the **JWT** ("a public key in a JWT"). | We parse it fully: read the EC `jwk` from the JWT header at registration, verify ES256; on refresh verify against the **stored** key. | The docs punt JWT details to the spec; we implemented them so the proof is actually checked. |
@@ -242,7 +243,9 @@ endpoint to probe cookie delivery.
 
 - `src/main.rs` — the whole server (~5 handlers + JWT/ES256 verification), heavily commented.
 - `localhost+2*.pem` — mkcert TLS cert/key (git-ignored via the parent repo).
-- Reference server to diff against: <https://github.com/drubery/dbsc-test-server>
+- Reference servers to diff against: <https://github.com/drubery/dbsc-test-server> (Chrome
+  team's Deno test server) and <https://github.com/report-uri/dbsc-php> (production PHP lib
+  with an attack-case test harness; our JWT/cookie hardening follows it)
 - Spec: <https://w3c.github.io/webappsec-dbsc/> ·
   Testing guide: <https://github.com/w3c/webappsec-dbsc/wiki/Testing-early-versions-of-DBSC> ·
   Chrome docs: <https://developer.chrome.com/docs/web-platform/device-bound-session-credentials>

@@ -116,8 +116,10 @@ async fn index() -> Html<&'static str> {
 /// `path` = where Chrome will POST its signed proof; `challenge` is echoed back in the JWT.
 fn registration_header() -> (HeaderName, HeaderValue) {
     let challenge = nonce("chal");
+    // Offer only ES256 (the only alg we verify). Pinning one alg also avoids
+    // algorithm-confusion, matching the reference PHP lib.
     let value = format!(
-        "(ES256 RS256); path=\"/dbsc/register\"; challenge=\"{challenge}\"; authorization=\"auth-code-123\""
+        "(ES256); path=\"/dbsc/register\"; challenge=\"{challenge}\"; authorization=\"auth-code-123\""
     );
     println!("\n[trigger] Secure-Session-Registration: {value}");
     (
@@ -163,6 +165,10 @@ async fn register(State(state): State<AppState>, headers: HeaderMap, body: Strin
     println!("[register] jwt header: {jwt_header}");
     println!("[register] jwt claims: {claims}");
 
+    // Pin ES256 — reject alg=none / RS-with-EC-key confusion before touching the signature.
+    if jwt_header.get("alg").and_then(|a| a.as_str()) != Some("ES256") {
+        return (StatusCode::BAD_REQUEST, "unsupported JWT alg (need ES256)").into_response();
+    }
     // The device public key is embedded in the JWT header for registration.
     let Some(pubkey) = pubkey_from_jwk(&jwt_header) else {
         return (StatusCode::BAD_REQUEST, "no jwk in JWT header").into_response();
@@ -217,8 +223,9 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap, body: String
 
     // Proof provided: the refresh JWT has NO embedded key — verify it against the key we
     // stored at registration. That's the whole point: only this device can re-sign.
-    if let Some((_, claims, signing_input, sig_b64)) = decode_jwt(&jwt) {
-        let verified = verify_sig(&signing_input, &sig_b64, &stored_key);
+    if let Some((jwt_header, claims, signing_input, sig_b64)) = decode_jwt(&jwt) {
+        let es256 = jwt_header.get("alg").and_then(|a| a.as_str()) == Some("ES256");
+        let verified = es256 && verify_sig(&signing_input, &sig_b64, &stored_key);
         println!("[refresh] claims: {claims}  | verified against stored key: {verified}");
     }
     println!("[refresh] re-minting cookie for {session_id}");
@@ -242,17 +249,19 @@ fn session_response(session_id: &str) -> Response {
                 { "type": "include", "domain": HOST, "path": "/" }
             ]
         },
-        // The cookie Chrome should treat as device-bound. `Domain=` is required so it
-        // matches the domain-based scope above.
+        // The cookie Chrome treats as device-bound. Host-only (no Domain) + Secure +
+        // HttpOnly, matching the production reference lib (report-uri/dbsc-php). A fresh
+        // value is minted every register/refresh (re-using the old value makes Chrome
+        // think "no refresh happened" and drop the session).
         "credentials": [{
             "type": "cookie",
             "name": COOKIE_NAME,
-            "attributes": format!("Domain={HOST}; Path=/; SameSite=Strict;")
+            "attributes": "Path=/; Secure; HttpOnly; SameSite=Strict"
         }]
     });
 
     let set_cookie = format!(
-        "{COOKIE_NAME}={cookie_value}; Domain={HOST}; Path=/; Max-Age={COOKIE_MAX_AGE_SECS}; SameSite=Strict"
+        "{COOKIE_NAME}={cookie_value}; Path=/; Max-Age={COOKIE_MAX_AGE_SECS}; Secure; HttpOnly; SameSite=Strict"
     );
     println!("[session] Set-Cookie: {set_cookie}");
 
