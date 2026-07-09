@@ -100,6 +100,47 @@ Server verifies vs stored key, → 200 config + fresh Set-Cookie
   `header.payload`, so a valid signature proves possession of the private key *and* binds this
   exact challenge.
 
+### The three IDs (and how long each lives) — don't mix them up
+
+DBSC juggles three different identifiers. Confusing them is the #1 source of "wait, which id
+is this?" — here's each, side by side:
+
+| Identifier | Example | Changes? | What it's for |
+|------------|---------|----------|---------------|
+| **`session_identifier`** (the "session id") | `sess12` | **Stable for the whole login session** — same across every refresh | The handle the server uses to find the **stored device key** for a session. Chrome sends it back on each refresh (`Sec-Secure-Session-Id`). |
+| **bound cookie value** | `cookie13` → `cookie15` → … | **Rotates on every refresh** (must!) | The short-lived, device-bound **credential** itself. Re-emitting the old value makes Chrome think no refresh happened and drop the session. |
+| **correlation cookie** (`dbsc-registration-sessions-id`) | `regid11` | Set once at the trigger | Links the register POST back to the login. This demo *sets* it but doesn't *read* it (see §7). |
+
+#### What "the session id is stable" really means
+
+The `session_identifier` is created **once, at registration**, and then **reused for the
+entire life of that login session** — through every automatic refresh, even if the user
+closes the tab and comes back days later. It is **not** regenerated on refresh (only the
+*cookie value* is). Think of it as a **handle to a server-side binding**
+(`session_identifier → device public key`), and that binding lives as long as the login
+session does.
+
+So it is *stable per login session*, **not** a permanent per-user value:
+
+- **Same login session** (refreshes, tab closed & reopened, returning after days while the
+  session is still valid) → **same `session_identifier`**. The bound cookie has expired, but
+  Chrome silently refreshes it under the same id — no re-login, invisible to the user.
+- **A new login** (the previous session expired, the user logged out, or you revoked it) →
+  a **brand-new registration → brand-new `session_identifier`** bound to a fresh key proof.
+  You do **not** reuse the old id for a new login — each session gets its own (so you can
+  revoke them independently); the reference servers even *reject* re-registering an
+  already-bound session.
+
+**The rule in one line:** one login session ↔ one `session_identifier`. Stable while that
+session lives; new only when the user registers again. Its lifetime is **your** decision — it
+lives exactly as long as the server-side binding, which you tie to your login/session TTL
+(a 30-day "remember me" keeps the same id for weeks; a short session rotates it sooner).
+
+> In this demo there is no real login, so the store is keyed directly by the
+> `session_identifier` and every "Start session" click is a brand-new session. A production
+> server keys its binding by the **stable app session id** instead, and treats the
+> `session_identifier` as a separate nonce the browser echoes back (see §9.3).
+
 ---
 
 ## 4. Setup & run
