@@ -287,6 +287,44 @@ So the cookie counts differ:
 handshake (≈ the challenge TTL, minutes) — not the short bound cookie, and not the long login
 session. In production it disappears entirely. *(This demo sets it but never reads it — see §7.)*
 
+### Two challenge-bearing headers, and why they look different
+
+Both Flow 1 and Flow 3 hand the browser a challenge to sign — but via **two different headers**
+with different shapes. That surprises people; here's why:
+
+```
+Flow 1:  Secure-Session-Registration: (ES256); path="/dbsc/register"; challenge="chal1"; authorization="auth-code-123"
+Flow 3:  Secure-Session-Challenge:    "refchal5"; id="sess3"
+```
+
+| | Flow 1 — `Secure-Session-Registration` | Flow 3 — `Secure-Session-Challenge` |
+|---|---|---|
+| **Job** | Start a **new** session | Re-prove an **existing** session |
+| **Who initiates** | Server **invites** (rides the login/303) | Server **responds** to the browser's own refresh attempt |
+| `(ES256)` algorithm | ✅ negotiate the alg (once) | ❌ already agreed at registration |
+| `path=` endpoint | ✅ where to POST the proof | ❌ browser already knows `refresh_url` (from the config) |
+| **challenge** | ✅ as a `challenge="…"` **parameter** | ✅ as the **main value** `"refchal5"` |
+| `authorization=` | ✅ optional app auth code (setup-time) | ❌ not relevant to a refresh |
+| `id=` | ❌ no session exists yet | ✅ **which** session this is for |
+
+**Why registration carries more:** nothing is set up yet, so it must bootstrap *everything* —
+which algorithm to sign with, *where* to send the proof, the challenge, and an auth code. After
+that it's all remembered (in the session config), so the refresh challenge only needs the two
+things that actually change: the **new challenge** and **which session** (`id`).
+
+**Why only the challenge header has `id`:** on refresh the browser may hold several sessions, so
+it must say which one; at registration there's no session yet (the flow is identified by the
+`path` you post to instead).
+
+**The deeper reason — invite vs. response:** registration is server-*initiated* (you invite the
+browser), so the challenge is *bundled into the invite* → **single-phase**. Refresh is
+browser-*initiated* (the browser decides its cookie is expiring and calls you), so there's no
+invite to bundle into — the server hands back a **standalone** `Secure-Session-Challenge` in a
+`403`, the browser signs it and retries → **two-phase**. (They're also two distinct
+structured-field grammars per the spec: registration = inner-list `(ES256)` + params with the
+challenge as a *parameter*; challenge = a *string* value + an `id` param — Chrome expects exactly
+these shapes.)
+
 ---
 
 ## 4. Setup & run
