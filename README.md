@@ -444,6 +444,19 @@ old persisted DBSC sessions before a fresh run.
   So a real domain vs. `localhost` makes **no difference on macOS**; the blocker is the
   **client-side macOS path**, not the origin.
 
+  **`Set-Cookie` itself works — proven with a control cookie.** To rule out "`Set-Cookie` is
+  broken," we set a **second, ordinary cookie** (`probe_plain`, `Max-Age=3600`, *not* in
+  `credentials`) on the **same** `/dbsc/register` + `/dbsc/refresh` responses. Result on
+  `/api/protected`: the correlation cookie (set on the **normal** `/start-form` response) is
+  delivered ✅, but **neither** the managed bound cookie **nor** `probe_plain` (both set on the
+  **DBSC-engine** responses) is delivered ❌. Two takeaways: (1) `Set-Cookie` on a normal response
+  is fine; (2) cookies set on the register/refresh responses **don't populate the page's normal
+  cookie jar at all** — those are the DBSC engine's own requests. So the **only** intended way for
+  a register/refresh cookie to reach app requests is Chrome's **managed-cookie injection**, which
+  is exactly the step that doesn't complete on the macOS software-keys path. (The `probe_plain`
+  control cookie is still emitted by the server — see `session_response` — so you can reproduce
+  this side-by-side.)
+
   **Ruled out (things we tried that made no difference):** `fetch()` vs. top-level
   navigation; `SameSite=Lax` vs. `Strict`; `Domain=localhost` vs. host-only; the cookie **name**
   (`DBSC_COOKIE_NAME`); the strict **`__Host-` prefix**
