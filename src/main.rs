@@ -86,16 +86,30 @@ fn flow_header(n: u8, title: &str) {
     println!("\n════════ FLOW {n}: {title} ════════");
 }
 
-/// The raw incoming `Cookie:` header (what the browser chose to send on THIS request), so we
-/// can see exactly which cookies ride which request — e.g. whether the correlation cookie or
-/// the bound cookie is attached to /dbsc/register, /dbsc/refresh, etc.
+/// ALL incoming `Cookie:` header values, joined with "; ". HTTP allows **multiple** `Cookie`
+/// headers, and `headers.get()` returns only the FIRST — so a cookie Chrome puts in a *second*
+/// `Cookie` header (which is exactly what it does for the DBSC-managed cookie) would be silently
+/// missed. Reading `get_all` is the fix — this is why our earlier checks reported `false` even
+/// though DevTools showed the bound cookie on the request (see §5).
 fn cookie_in(headers: &HeaderMap) -> String {
+    let joined = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if joined.is_empty() { "(none)".to_string() } else { joined }
+}
+
+/// True if any incoming `Cookie` header carries the device-bound cookie (across ALL headers).
+fn has_bound_cookie(headers: &HeaderMap) -> bool {
+    let name = format!("{}=", cfg().cookie_name);
     headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("(none)")
-        .to_string()
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|h| h.split(';'))
+        .any(|c| c.trim().starts_with(&name))
 }
 
 #[tokio::main]
@@ -354,16 +368,11 @@ fn session_response(session_id: &str) -> Response {
 /// A "protected" endpoint: reports whether the device-bound cookie was sent with the request.
 async fn protected(headers: HeaderMap) -> Response {
     let _log = LOG_LOCK.lock().unwrap();
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let authed = cookie
-        .split(';')
-        .any(|c| c.trim().starts_with(&format!("{}=", cfg().cookie_name)));
+    let cookie = cookie_in(&headers);
+    let authed = has_bound_cookie(&headers);
     flow_header(5, "PROTECTED  (GET /api/protected)");
     println!("  REQUEST : GET /api/protected");
-    println!("            Cookie: {cookie:?}");
+    println!("            {} Cookie header(s): {cookie}", headers.get_all(header::COOKIE).iter().count());
     println!("  RESPONSE: 200 OK");
     println!("            body: {{\"authenticated\":{authed},\"cookie_header\":{cookie:?}}}");
     Json(json!({ "authenticated": authed, "cookie_header": cookie })).into_response()
@@ -375,16 +384,22 @@ async fn protected(headers: HeaderMap) -> Response {
 /// `false`. (This is what the `dbsc-php` `?route=account` page demonstrates.)
 async fn protected_page(headers: HeaderMap) -> Response {
     let _log = LOG_LOCK.lock().unwrap();
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let authed = cookie
-        .split(';')
-        .any(|c| c.trim().starts_with(&format!("{}=", cfg().cookie_name)));
+    let cookie = cookie_in(&headers);
+    let authed = has_bound_cookie(&headers);
     flow_header(6, "PROTECTED PAGE  (GET /protected-page — navigation, not fetch)");
     println!("  REQUEST : GET /protected-page   (top-level navigation)");
-    println!("            Cookie: {cookie:?}");
+    // Print EVERY raw Cookie header separately (there can be more than one) before parsing,
+    // so we can see exactly what arrived and whether the bound cookie is in a second header.
+    let raw: Vec<&str> = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    println!("            raw Cookie header count = {}", raw.len());
+    for (i, h) in raw.iter().enumerate() {
+        println!("            Cookie[{i}]: {h}");
+    }
+    println!("            looking for cookie named: {}", cfg().cookie_name);
     println!("  RESPONSE: 200 OK  |  authenticated={authed}");
     let html = format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Protected (navigation)</title>\
