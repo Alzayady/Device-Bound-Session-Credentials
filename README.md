@@ -760,12 +760,13 @@ feature install ttls_fwdproxy       # so cargo can fetch crates via fwdproxy (el
 command -v cargo || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Point the app at the host cert + a 442xx HTTPS port, bound on IPv6.
-H=$(hostname)                       # e.g. devvm1234.abc0.facebook.com
-export DBSC_BIND="[::]:44200"       # 442xx = HTTPS range; bind [::] (IPv6!), not 127.0.0.1
+H=$(hostname)                          # e.g. devvm1234.abc0.facebook.com
+FBINFRA="${H/.facebook.com/.fbinfra.net}"   # KEEP the region: devvm1234.abc0.fbinfra.net
+export DBSC_BIND="[::]:44200"          # 442xx = HTTPS range; bind [::] (IPv6!), not 127.0.0.1
 export DBSC_TLS_CERT="/etc/pki/tls/certs/${H}.crt"
 export DBSC_TLS_KEY="/etc/pki/tls/certs/${H}.key"
-export DBSC_ORIGIN="https://${H%%.*}.fbinfra.net:44200"   # note: .fbinfra.net, NOT .facebook.com
-export DBSC_HOST="${H%%.*}.fbinfra.net"
+export DBSC_ORIGIN="https://${FBINFRA}:44200"   # .fbinfra.net, NOT .facebook.com; WITH region
+export DBSC_HOST="${FBINFRA}"
 cargo run
 ```
 

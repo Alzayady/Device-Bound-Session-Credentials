@@ -25,12 +25,15 @@ grep -q fwdproxy "$HOME/.cargo/config.toml" 2>/dev/null \
   || printf '[http]\nproxy = "http://fwdproxy:8080"\n' >> "$HOME/.cargo/config.toml"
 
 # Point the app at the host cert + a 442xx HTTPS port, bound on IPv6 (see README §10 gotchas).
-H="$(hostname)"; S="${H%%.*}"
+# The browser-facing hostname is the FULL host with .facebook.com -> .fbinfra.net (KEEP the
+# region, e.g. devvm59361.lla0.facebook.com -> devvm59361.lla0.fbinfra.net).
+H="$(hostname)"
+FBINFRA="${H/.facebook.com/.fbinfra.net}"
 export DBSC_BIND="[::]:44200"
 export DBSC_TLS_CERT="/etc/pki/tls/certs/${H}.crt"
 export DBSC_TLS_KEY="/etc/pki/tls/certs/${H}.key"
-export DBSC_ORIGIN="https://${S}.fbinfra.net:44200"
-export DBSC_HOST="${S}.fbinfra.net"
+export DBSC_ORIGIN="https://${FBINFRA}:44200"
+export DBSC_HOST="${FBINFRA}"
 
 echo ">> DBSC_ORIGIN = $DBSC_ORIGIN"
 echo ">> Open that URL in Chrome (macOS first, then Windows). Ctrl-C to stop."
