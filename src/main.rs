@@ -121,6 +121,7 @@ async fn main() {
         .route("/dbsc/register", post(register))
         .route("/dbsc/refresh", post(refresh))
         .route("/api/protected", get(protected))
+        .route("/protected-page", get(protected_page))
         .with_state(state);
 
     // rustls 0.23 needs a process-wide crypto provider chosen explicitly.
@@ -372,6 +373,35 @@ async fn protected(headers: HeaderMap) -> Response {
     Json(json!({ "authenticated": authed, "cookie_header": cookie })).into_response()
 }
 
+/// Same check as `/api/protected`, but reached by a **top-level navigation** (a real `<a href>`),
+/// not `fetch()`. Chrome injects the DBSC-managed cookie into document navigations but NOT into
+/// `fetch()`/XHR requests on this setup — so this page shows `true` where `/api/protected` shows
+/// `false`. (This is what the `dbsc-php` `?route=account` page demonstrates.)
+async fn protected_page(headers: HeaderMap) -> Response {
+    let _log = LOG_LOCK.lock().unwrap();
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let authed = cookie
+        .split(';')
+        .any(|c| c.trim().starts_with(&format!("{}=", cfg().cookie_name)));
+    flow_header(6, "PROTECTED PAGE  (GET /protected-page — navigation, not fetch)");
+    println!("  REQUEST : GET /protected-page   (top-level navigation)");
+    println!("            Cookie: {cookie:?}");
+    println!("  RESPONSE: 200 OK  |  authenticated={authed}");
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Protected (navigation)</title>\
+         <body style=\"font:15px/1.5 system-ui;max-width:720px;margin:40px auto;padding:0 16px\">\
+         <h1>Protected page (navigation)</h1>\
+         <p>Reached by a <b>top-level navigation</b> (a real link) — not <code>fetch()</code>.</p>\
+         <p>Device-bound cookie delivered: <b>{authed}</b></p>\
+         <pre style=\"background:#111;color:#b7f;padding:12px;border-radius:8px;white-space:pre-wrap\">Cookie: {cookie}</pre>\
+         <p><a href=\"/\">&larr; back</a></p></body>"
+    );
+    (StatusCode::OK, Html(html)).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // JWT helpers (compact JWS parse + ES256 verification)
 // ---------------------------------------------------------------------------
@@ -460,8 +490,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <li><b>Start session</b> submits a form to <code>/start-form</code>; the browser then
         automatically POSTs <code>/dbsc/register</code> and later <code>/dbsc/refresh</code>.
         Watch the terminal.</li>
-    <li><b>Call protected</b> checks whether the device-bound cookie was delivered.
-        (On the macOS software-keys test setup this stays <code>false</code> — see README.)</li>
+    <li><b>Call protected (fetch)</b> checks the cookie via <code>fetch()</code> — Chrome does
+        <b>not</b> inject the device-bound cookie into <code>fetch()</code>/XHR, so this stays
+        <code>false</code>.</li>
+    <li><b>Open protected page (navigation)</b> is a real link (a top-level navigation) — Chrome
+        <b>does</b> inject the bound cookie here, so this shows <code>true</code>. That fetch-vs-
+        navigation difference is the whole point (see README §5).</li>
   </ol>
   <p>
     <!-- This is a real form-POST navigation (so the page reloads) ON PURPOSE. The
@@ -471,7 +505,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <form method="POST" action="/start-form" style="display:inline">
       <button type="submit">Start session</button>
     </form>
-    <button onclick="callProtected()">Call protected</button>
+    <button onclick="callProtected()">Call protected (fetch)</button>
+    <a href="/protected-page"><button type="button">Open protected page (navigation)</button></a>
   </p>
   <pre id="log">(server log is in your terminal; browser log here)</pre>
 <script>
