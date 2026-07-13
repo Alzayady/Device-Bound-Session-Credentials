@@ -1,3 +1,7 @@
 /target
 *.pem
 .claude/
+
+# Local-only deploy helpers (contain internal specifics — never publish)
+deploy.sh
+run-devserver.sh
