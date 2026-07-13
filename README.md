@@ -413,7 +413,7 @@ old persisted DBSC sessions before a fresh run.
 
 ## 5. What works vs. what doesn't
 
-### Findings summary (all tested on a real internal HTTPS domain, macOS Chrome)
+### Findings summary (all tested on a real HTTPS domain, macOS Chrome)
 
 | Result | Status |
 |--------|--------|
@@ -455,12 +455,11 @@ path. Client-side, macOS-specific. Expected to work on **Windows Chrome** (DBSC 
   request at all; a fuller multi-refresh trace showed it DOES reach `/dbsc/refresh`, just not the
   app request.)*
 
-  **`localhost` is also ruled out (tested).** We deployed this exact server to a **real,
-  browser-trusted internal HTTPS domain** (`https://devvm…lla0.fbinfra.net:44200`, via Meta's
-  Secure Web Apps — see §10), valid cert, DBSC handshake verifying end-to-end. On **macOS Chrome
-  it was still `authenticated=false`** — the bound cookie still isn't injected into app requests.
-  So a real domain vs. `localhost` makes **no difference on macOS**; the blocker is the
-  **client-side macOS path**, not the origin.
+  **`localhost` is also ruled out (tested).** We deployed this exact server behind a **real,
+  browser-trusted HTTPS domain** (valid cert, see §10), DBSC handshake verifying end-to-end. On
+  **macOS Chrome it was still `authenticated=false`** — the bound cookie still isn't injected into
+  app requests. So a real domain vs. `localhost` makes **no difference on macOS**; the blocker is
+  the **client-side macOS path**, not the origin.
 
   **`Set-Cookie` itself works — proven with a control cookie.** To rule out "`Set-Cookie` is
   broken," we set a **second, ordinary cookie** (`probe_plain`, `Max-Age=3600`, *not* in
@@ -479,8 +478,8 @@ path. Client-side, macOS-specific. Expected to work on **Windows Chrome** (DBSC 
   (`DBSC_COOKIE_NAME`); the strict **`__Host-` prefix**
   ([RFC 6265bis §4.1.3.2](https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-05#section-4.1.3.2)) —
   **retested on the real domain, single session, still `false`**; **cookie lifetime**
-  (`Max-Age=20` vs `120` — expiry is not the cause); and **`localhost` vs. a real internal HTTPS
-  domain** (still `false` on macOS). Every one → still `false`, including a clean single-session
+  (`Max-Age=20` vs `120` — expiry is not the cause); and **`localhost` vs. a real HTTPS domain**
+  (still `false` on macOS). Every one → still `false`, including a clean single-session
   run — strong evidence the blocker is **not** a cookie-attribute or origin problem but the
   client testing path below.
 
@@ -769,66 +768,30 @@ robustness/observability on top.
 
 ---
 
-## 10. Deploy to a real (internal) HTTPS domain to test cookie delivery
+## 10. Deploy behind a real HTTPS domain to test cookie delivery
 
-§5 showed the bound cookie isn't delivered to app requests on the **macOS + `localhost`**
-testing path. To retest on a **real, browser-trusted HTTPS origin** without AWS/domains/cost, use
-Meta's **Secure Web Apps (VPNLess WWW)**: run the server on a **devserver** on an HTTPS port in
-the **442xx** range, and corp Chrome reaches it at `https://<host>.fbinfra.net:442xx` with a cert
-it already trusts — **on both macOS and Windows, VPN-less**.
+§5 showed the bound cookie isn't delivered to app requests on the **macOS + `localhost`** path.
+To retest on a **real, browser-trusted HTTPS origin**, the server is env-configurable (defaults =
+the local mkcert setup), so no code changes are needed — just point it at a real host's cert and
+origin:
 
-The server is env-configurable (defaults = the local mkcert setup), so no code fork is needed.
-
-**Get a devserver** (persistent is right for a long-running server; OnDemand is fiddlier — no
-`sudo`, 18h lifetime): reserve one at bunnylol **`devservers`** (`fburl.com/dev`) → *Reserve a
-Server* → default size → nearest DC → **Duration: permanent** → purpose → *Reserve* (~10 min).
-Copy its hostname (`devvmXXXX.<region>.facebook.com`) and connect: `x2ssh -et <host>` (VPN-less)
-or `ssh <host>` (on VPN). First time: run `fixmyserver` on the box.
-
-**Copy the code up** (from your laptop):
 ```bash
-DEV=devvmXXXX.<region>.facebook.com
-rsync -az --delete --exclude target --exclude .git --exclude 'localhost+2*.pem' \
-  ./ "$DEV:~/dbsc_hello/"
-```
-
-**On the devserver:**
-```bash
-cd ~/dbsc_hello
-feature install ttls_fwdproxy       # so cargo can fetch crates via fwdproxy (else the build hangs)
-command -v cargo || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# Point the app at the host cert + a 442xx HTTPS port, bound on IPv6.
-H=$(hostname)                          # e.g. devvm1234.abc0.facebook.com
-FBINFRA="${H/.facebook.com/.fbinfra.net}"   # KEEP the region: devvm1234.abc0.fbinfra.net
-export DBSC_BIND="[::]:44200"          # 442xx = HTTPS range; bind [::] (IPv6!), not 127.0.0.1
-export DBSC_TLS_CERT="/etc/pki/tls/certs/${H}.crt"
-export DBSC_TLS_KEY="/etc/pki/tls/certs/${H}.key"
-export DBSC_ORIGIN="https://${FBINFRA}:44200"   # .fbinfra.net, NOT .facebook.com; WITH region
-export DBSC_HOST="${FBINFRA}"
+export DBSC_ORIGIN="https://example.com"        # your real, browser-facing origin
+export DBSC_HOST="example.com"                   # cookie/scope domain
+export DBSC_BIND="[::]:8443"                      # socket to listen on
+export DBSC_TLS_CERT="/path/to/fullchain.pem"    # a cert Chrome already trusts (e.g. Let's Encrypt)
+export DBSC_TLS_KEY="/path/to/privkey.pem"
 cargo run
 ```
 
-**Then open** `https://<host>.fbinfra.net:44200` in Chrome (with the same DBSC flags from §4).
-First try macOS, then **Windows** (see below).
-
-### Gotchas (these will bite)
-- **442xx = HTTPS** (your app serves TLS, which it does), **441xx = plain HTTP**. Wrong range → the
-  extension shows "Error loading" even though the server logs a 200. DBSC needs HTTPS → **442xx**.
-- **Bind `[::]` (IPv6), not `127.0.0.1`** — devserver DNS/routing is IPv6-first; IPv4 loopback →
-  `ERR_CONNECTION_TIMED_OUT`.
-- **In the browser use `.fbinfra.net`, not `.facebook.com`** (that synthetic hostname is what the
-  extension intercepts). `.facebook.com` is only for SSH.
-- If the tunnel errors: `kinit && fb-sks-agent renew`, then `fb-sks-agent status` (confirm `X2P`).
-- OnDemand can't use `ssh -L`; Secure Web Apps is the supported route. A **devserver** is simplest.
+Any host with a **publicly/organizationally trusted cert** works: a cloud VM with a Let's Encrypt
+cert, a reverse proxy that forwards to this server, a dev tunnel that terminates TLS at a real
+domain, etc. The requirement is a **real domain with a valid cert** (not `localhost`, not an IP) so
+Chrome treats it as a proper secure context.
 
 ### The decisive variable is still the client
-A real internal HTTPS origin removes the `localhost` variable — but the blocker is most likely the
-**macOS software-keys/manual-testing path**, which is client-side. So from **this same macOS
-Chrome it may still show `authenticated=false`**. Seeing `authenticated=true` most likely needs
-**Windows Chrome** (DBSC is GA there, Chrome 146+) pointed at the same `https://<host>.fbinfra.net:44200`.
-Testing from **both** macOS and Windows against the one URL pinpoints exactly which variable mattered.
-
-### Internal references
-- Secure Web Apps: <https://www.internalfb.com/wiki/NISE/Secure_Channels/VPNLess_WWW_Chrome_Extension/Secure_Web_Apps/>
-- Meta's internal DBSC wiki + live prototype: <https://www.internalfb.com/wiki/Web-secure-frameworks/Device_Bound_Session_Credentials/> · <https://www.internalfb.com/intern/dbsc-test/>
+A real HTTPS origin removes the `localhost` variable — but the blocker is most likely the
+**macOS software-keys / manual-testing path**, which is client-side. Tested on a real HTTPS domain,
+**macOS Chrome still showed `authenticated=false`** (see §5). Seeing `authenticated=true` most
+likely needs **Windows Chrome** (DBSC is generally available there, Chrome 146+) pointed at the
+same URL. Testing from **both** macOS and Windows against one URL pinpoints which variable mattered.
