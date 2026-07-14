@@ -885,6 +885,34 @@ guarantees hold at handshake time — plus one WS-specific caveat. Work down thi
 > close live sockets on revoke, and/or periodically re-auth in-band. DBSC hardens *getting* the
 > connection; keeping a long-lived one secure is still on you.
 
+### HTTP vs WebSocket — is anything different?
+
+**No — at the DBSC layer the two behave identically.** Chrome treats the WS **upgrade** as just
+another same-origin credentialed `GET`, so everything observed on `/api/protected` was also observed
+on `/ws`, with matching cookie values at matching times:
+
+| Behaviour (observed in the logs) | HTTP `/api/protected` | WebSocket `/ws` | Same? |
+|---|:---:|:---:|:---:|
+| Bound cookie attached | ✅ | ✅ (on the handshake) | ✅ |
+| `authenticated=true` with a valid cookie | ✅ | ✅ | ✅ |
+| `authenticated=false` with no cookie (pre-register / post-logout) | ✅ | ✅ | ✅ |
+| Cookie tracked the same rotation (`cookie4 … 25`) | ✅ | ✅ | ✅ |
+| Not blocked during a refresh (returned immediately with a valid cookie) | ✅ | ✅ | ✅ |
+| Covered by the whole-origin DBSC scope | ✅ | ✅ | ✅ |
+| Multiple `Cookie` headers read correctly (`get_all`) | ✅ | ✅ | ✅ |
+
+**The one structural difference is *re-check cadence*, not DBSC behaviour** — it's inherent to the
+transports:
+
+| | HTTP request | WebSocket |
+|---|---|---|
+| When the bound cookie is checked | **every** request | **once**, at the upgrade handshake |
+| After that | next request re-checks | the open socket runs on with **no** further cookie checks (frames carry none) |
+| Effect of cookie expiry / revoke | the **next** request is blocked/unauthenticated | an **already-open** socket keeps running (see the caveat above) |
+
+So *establishment* semantics are the same; the only divergence is that HTTP re-validates per request
+while a WebSocket is validated once per connection.
+
 ### Why axum's WebSocket support, not raw `tungstenite`
 This server uses `axum::extract::ws` (enabled via `axum`'s **`ws`** feature), which is built on
 `tokio-tungstenite`. So `tungstenite` *is* the engine underneath — but going through axum means the
