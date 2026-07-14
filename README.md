@@ -44,7 +44,7 @@ registration, (2) verifies the signed proof and sets a cookie, (3) re-verifies o
 
 ---
 
-## 2. Endpoints (6)
+## 2. Endpoints (7)
 
 | Method & path         | Who calls it            | What it does |
 |-----------------------|-------------------------|--------------|
@@ -53,6 +53,7 @@ registration, (2) verifies the signed proof and sets a cookie, (3) re-verifies o
 | `POST /dbsc/register` | **Browser (automatic)** | Receives the signed proof JWT (`Secure-Session-Response`). The JWT **header** embeds the device **public key** as a `jwk`; the **claims** echo our challenge back as the `jti`. We verify the ES256 signature, store the key under a new `session_identifier`, and return the **session config** JSON + a short-lived bound cookie. |
 | `POST /dbsc/refresh`  | **Browser (automatic)** | Called when the bound cookie needs refreshing. First hit has no proof → we reply **403 + `Secure-Session-Challenge`**. The browser re-signs (same device key; new challenge as `jti`, **no `jwk`**) and retries → we verify against the **stored** key and re-mint the cookie. Unknown session → **404** (drops stale sessions). |
 | `GET  /api/protected` | Web client (Call protected button) | Reports whether the device-bound cookie was delivered (`authenticated: true/false`). |
+| `GET  /ws`            | Web client (Call protected (WebSocket) button) | Same delivery check over a **WebSocket handshake** — to test whether DBSC/the bound cookie covers WebSockets. Reads the cookie from the HTTP **upgrade** request, then replies with one JSON frame (§11). |
 | `GET  /logout`        | Web client (Logout button) | **Revoke**: deletes the server-side `Binding`, expires the bound cookie, and sends `Clear-Site-Data` to end the DBSC session. A future refresh then gets `404`. |
 
 Header names are `Secure-Session-*`; Chrome's docs get these right — it's older blog posts
@@ -632,7 +633,7 @@ the real thing → read `dbsc-php`; learning the handshake → read this.
 
 ## 8. Files & references
 
-- `src/main.rs` — the whole server (6 handlers + JWT/ES256 verification + `Binding` store), heavily commented.
+- `src/main.rs` — the whole server (7 handlers + JWT/ES256 verification + `Binding` store), heavily commented.
 - `localhost+2*.pem` — mkcert TLS cert/key (git-ignored via the parent repo).
 - Reference servers to diff against: <https://github.com/drubery/dbsc-test-server> (Chrome
   team's Deno test server) and <https://github.com/report-uri/dbsc-php> (production PHP lib
@@ -810,3 +811,35 @@ Cookie delivery was **confirmed on macOS Chrome** over a real HTTPS domain —
 `/api/protected` returns `authenticated=true` (see §5). No Windows needed. (Earlier notes here
 claimed macOS "still showed `authenticated=false`"; that was the multi-`Cookie`-header parsing bug,
 since fixed.)
+
+---
+
+## 11. Does DBSC cover WebSockets? (the `/ws` test)
+
+The **`Call protected (WebSocket)`** button opens a same-origin `wss://localhost:3000/ws` and the
+server reports whether the device-bound cookie arrived. This lets you check DBSC's behaviour for
+WebSockets first-hand.
+
+### How to read the result — cookies ride the *handshake*, not the frames
+A WebSocket connection **starts as an ordinary HTTP `GET` with `Upgrade: websocket`** (the
+handshake). The browser attaches same-origin cookies to *that* request exactly like any other
+credentialed GET; individual WS **messages carry no cookies**. So the server reads the bound cookie
+from the **upgrade request's headers** (the same `get_all(Cookie)` helper as `/api/protected`) and
+replies over the socket with `{ "authenticated": …, "transport": "websocket" }`.
+
+### Two distinct questions — and what to expect
+| Question | Expectation | How to see it |
+|----------|-------------|---------------|
+| **Delivery:** does the bound cookie ride a `wss://` handshake? | **Yes** — a same-origin WS upgrade is a normal credentialed GET, so `__Host-auth_cookie` attaches → `authenticated=true` (after you register a session). | FLOW 5 (WS) in the terminal; DevTools → Network → the `/ws` request → **Cookie** header. |
+| **Deferral/refresh:** if the cookie is *stale* at handshake time, does Chrome **defer the upgrade and refresh first** (as it does for `fetch()`/navigations)? | **Version-dependent — now being wired up.** Early DBSC deferred only regular HTTP requests, not WS upgrades. Chromium has since added handshake deferral for WebSockets ([CL 7173849](https://chromium-review.googlesource.com/c/chromium/src/+/7173849)), so a **recent** Chrome should refresh first; an older one won't. This probe tells you which behaviour *your* build has. | Let the bound cookie expire (`Max-Age=300`), then click the WS button. **If** a `POST /dbsc/refresh` FLOW fires *right before* the handshake completes → deferral covers WS in your Chrome. If the handshake goes out with a stale/absent cookie and **no** refresh precedes it → your build doesn't defer WS yet. |
+
+> **Testing tip:** to force the stale case, lower `COOKIE_MAX_AGE_SECS` (e.g. to `20`), register a
+> session, wait for the cookie to expire *without* triggering a normal request, then click the WS
+> button and watch whether a refresh fires ahead of the `/ws` handshake.
+
+### Why axum's WebSocket support, not raw `tungstenite`
+This server uses `axum::extract::ws` (enabled via `axum`'s **`ws`** feature), which is built on
+`tokio-tungstenite`. So `tungstenite` *is* the engine underneath — but going through axum means the
+WS route shares this server's Router **and TLS listener** (DBSC needs `wss://`, i.e. TLS), and, most
+importantly, gives us the **handshake `HeaderMap`** so we can read the cookie. Using raw
+`tungstenite` would mean hijacking the socket and doing the HTTP upgrade by hand for no benefit here.

@@ -10,6 +10,7 @@
 //!   POST /dbsc/register  – Chrome POSTs its signed proof JWT here; we verify + open a session [FLOW 2]
 //!   POST /dbsc/refresh   – Chrome re-proves possession here (challenge → signed retry → re-mint) [FLOW 3/4]
 //!   GET  /api/protected  – reports whether the device-bound cookie rode along  [FLOW 5]
+//!   GET  /ws             – same check over a WebSocket handshake (does DBSC cover WS?)  [FLOW 5]
 //!   GET  /logout         – revoke: delete the binding, clear the cookie, end the DBSC session  [FLOW 6]
 //!
 //! DBSC headers use the `Secure-Session-*` names (plus `Sec-Secure-Session-Id`). Chrome's
@@ -17,7 +18,10 @@
 //! obsolete `Sec-Session-*` — don't copy those. DBSC only runs over TLS, hence mkcert.
 
 use axum::{
-    extract::State,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -201,6 +205,7 @@ async fn main() {
         .route("/dbsc/register", post(register))
         .route("/dbsc/refresh", post(refresh))
         .route("/api/protected", get(protected))
+        .route("/ws", get(ws_protected))
         .route("/logout", get(logout))
         .with_state(state);
 
@@ -512,6 +517,36 @@ async fn protected(headers: HeaderMap) -> Response {
     Json(json!({ "authenticated": authed, "cookie_header": cookie })).into_response()
 }
 
+/// A "protected" endpoint reached over **WebSocket** — to test whether DBSC covers WS.
+///
+/// A WebSocket starts life as an ordinary HTTP `GET` with `Upgrade: websocket` (the *handshake*).
+/// Cookies ride that handshake request (never the individual frames), so we check the bound cookie
+/// **here, in the upgrade request's headers** — the same `HeaderMap` + helpers as `/api/protected`.
+/// We report the result over the socket, then close.
+///
+/// What to watch in DevTools: the bound cookie should attach to a same-origin `wss://` handshake
+/// just like any credentialed GET (→ `authenticated=true`). The open DBSC question is whether Chrome
+/// **defers + refreshes** the handshake when the cookie is *stale* (as it does for fetch/nav). If so,
+/// you'll see a `/dbsc/refresh` FLOW fire right before the handshake completes.
+async fn ws_protected(headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    let _log = LOG_LOCK.lock().unwrap();
+    let cookie = cookie_in(&headers);
+    let authed = has_bound_cookie(&headers);
+    flow_header(5, "PROTECTED via WebSocket  (GET /ws — HTTP upgrade handshake)");
+    println!("  REQUEST : GET /ws  (Upgrade: websocket)  |  Cookie: {cookie}");
+    println!("  RESPONSE: 101 Switching Protocols  ->  authenticated={authed} (sent as first WS message)");
+    // `on_upgrade` runs AFTER the 101 response; the cookie decision is already made from the
+    // handshake headers above, so we just carry `authed` into the socket task.
+    ws.on_upgrade(move |socket| ws_reply(socket, authed))
+}
+
+/// After the upgrade: send the auth result as one JSON text frame, then close.
+async fn ws_reply(mut socket: WebSocket, authed: bool) {
+    let msg = json!({ "authenticated": authed, "transport": "websocket" }).to_string();
+    let _ = socket.send(Message::Text(msg)).await;
+    let _ = socket.close().await;
+}
+
 /// Revoke (logout): end the device-bound session. Deletes the server-side `Binding` (so any
 /// future `/dbsc/refresh` gets 404 and Chrome drops the session), deletes the bound cookie, and
 /// sends `Clear-Site-Data` to tell Chrome to clear cookies + end the DBSC session for the origin.
@@ -647,6 +682,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
         Watch the terminal.</li>
     <li><b>Call protected</b> checks whether the device-bound cookie rode the request —
         <code>authenticated=true</code> once a session is registered.</li>
+    <li><b>Call protected (WebSocket)</b> does the same check on a <code>wss://</code>
+        <em>handshake</em> — testing whether the bound cookie (and DBSC) covers WebSockets.</li>
   </ol>
   <p>
     <!-- This is a real form-POST navigation (the page then shows /start-form's 200) ON PURPOSE.
@@ -657,6 +694,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <button type="submit">Start session</button>
     </form>
     <button onclick="callProtected()">Call protected</button>
+    <button onclick="callProtectedWs()">Call protected (WebSocket)</button>
     <a href="/logout"><button type="button">Logout (revoke)</button></a>
   </p>
   <pre id="log">(server log is in your terminal; browser log here)</pre>
@@ -668,6 +706,15 @@ async function callProtected() {
   const r = await fetch('/api/protected');
   const j = await r.json();
   log('GET /api/protected -> authenticated=' + j.authenticated);
+}
+
+// Open a same-origin WebSocket. The bound cookie (if any) rides the HTTP upgrade handshake;
+// the server reads it there and replies with one JSON frame. Watch the terminal for FLOW 5 (WS)
+// and DevTools -> Network -> the /ws request's Cookie header.
+function callProtectedWs() {
+  const ws = new WebSocket('wss://' + location.host + '/ws');
+  ws.onmessage = (e) => { log('WS /ws -> ' + e.data); ws.close(); };
+  ws.onerror = () => log('WS /ws -> error (is the session registered?)');
 }
 </script>
 </body>
