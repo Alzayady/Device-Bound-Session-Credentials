@@ -49,7 +49,7 @@ registration, (2) verifies the signed proof and sets a cookie, (3) re-verifies o
 | Method & path         | Who calls it            | What it does |
 |-----------------------|-------------------------|--------------|
 | `GET  /`              | Web client (you)        | Serves the demo page. |
-| `POST /start-form`    | Web client (Start session button) | Replies **303 → `/`** with a `Secure-Session-Registration` header + a `dbsc-registration-sessions-id` correlation cookie. This response is what makes the browser start DBSC. |
+| `POST /start-form`    | Web client (Start session button) | Replies **303 → `/`** with a `Secure-Session-Registration` header + a `login_auth_id` cookie (a stand-in for your login session — §3). This response is what makes the browser start DBSC. |
 | `POST /dbsc/register` | **Browser (automatic)** | Receives the signed proof JWT (`Secure-Session-Response`). The JWT **header** embeds the device **public key** as a `jwk`; the **claims** echo our challenge back as the `jti`. We verify the ES256 signature, store the key under a new `session_identifier`, and return the **session config** JSON + a short-lived bound cookie. |
 | `POST /dbsc/refresh`  | **Browser (automatic)** | Called when the bound cookie needs refreshing. First hit has no proof → we reply **403 + `Secure-Session-Challenge`**. The browser re-signs (same device key; new challenge as `jti`, **no `jwk`**) and retries → we verify against the **stored** key and re-mint the cookie. Unknown session → **404** (drops stale sessions). |
 | `GET  /api/protected` | Web client (Call protected button) | Reports whether the device-bound cookie was delivered (`authenticated: true/false`). |
@@ -240,7 +240,7 @@ source of "wait, which one is this?" Here they all are, grouped by lifetime:
 | **bound cookie value** (`auth_cookie`) | `cookie4` → `cookie6` → … | Every register **and** refresh | **Yes — every refresh** | ~one refresh cycle (`Max-Age=20s`) | ❌ |
 | **refresh challenge** | `refchal5` → `refchal7` | Every refresh (`403`) | **Yes — every refresh**, single-use | until used / next refresh (< challenge TTL) | ❌ |
 | **registration challenge** | `chal1` | Flow 1 invite | One-time | just the registration handshake | ❌ |
-| **correlation cookie** (`dbsc-registration-sessions-id`) | `regid2` | Flow 1 | One-time | registration window (minutes); **gone in prod** | ❌ |
+| **login/correlation cookie** (`login_auth_id`) | `login2` | Flow 1 | One-time | registration window (minutes); **in prod = your login session cookie** | ❌ |
 
 Read it as three tiers:
 
@@ -295,7 +295,7 @@ mean **completely different things**. The name collision trips everyone up:
 
 ```
 Secure-Session-Registration: (ES256); path="/dbsc/register"; challenge="…"   ← header #1
-Set-Cookie: dbsc-registration-sessions-id=regid11; Path=/; Max-Age=3600       ← header #2
+Set-Cookie: login_auth_id=login11; Path=/; Max-Age=3600                        ← header #2
 ```
 
 | Token | On which header | Kind | What it means |
@@ -312,13 +312,15 @@ Set-Cookie: dbsc-registration-sessions-id=regid11; Path=/; Max-Age=3600       �
 
 So one is "**where to send the proof**", the other is "**which URLs this cookie is sent for**".
 
-### The correlation cookie is a demo stand-in — production doesn't need it
+### `login_auth_id` is a demo stand-in for your login cookie — production doesn't need a separate one
 
-`dbsc-registration-sessions-id` exists here only because a hello-world has **no real login**. Its
-whole job is to answer *"which logged-in user is this `/dbsc/register` POST?"* — and in a real app
-your **login session cookie already answers that**: it rides the same-origin `/register` request
-automatically (we saw it do exactly that in the logs). So a dedicated correlation cookie is
-**redundant in production** — you'd drop it.
+This demo sets a cookie named **`login_auth_id`** (in drubery's reference server it's called
+`dbsc-registration-sessions-id`). It exists here only because a hello-world has **no real login**.
+Its whole job is to answer *"which logged-in user is this `/dbsc/register` POST?"* — and in a real
+app your **login/auth session cookie already answers that**: it rides the same-origin `/register`
+request automatically (we saw it do exactly that in the logs). So a dedicated cookie for this is
+**redundant in production** — you'd drop it and use the login session cookie. (In `dbsc-php` that's
+the PHP session, `session_id()` → the `PHPSESSID` cookie — no separate correlation cookie at all.)
 
 What `/dbsc/register` actually needs, and how the login cookie covers it without a third cookie:
 
@@ -330,8 +332,8 @@ So the cookie counts differ:
 
 | | This demo | Production |
 |---|-----------|------------|
-| Login/session cookie | *(none — no login)* | **long-lived** — auth + identifies the user at `/register` |
-| Correlation cookie | `dbsc-registration-sessions-id` (stand-in) | **not needed** |
+| Login/session cookie | `login_auth_id` (stand-in — no real login) | **long-lived** — auth + identifies the user at `/register` |
+| Separate correlation cookie | *(none — `login_auth_id` plays that role)* | **not needed** |
 | Bound cookie | `auth_cookie` (short) | `auth_cookie`-equivalent (short) |
 
 **Its `Max-Age` also isn't tied to any auth token:** it only needs to outlive the registration
@@ -439,7 +441,7 @@ header, so it was never seen. Fix: read **all** headers with `headers.get_all(CO
 ```
 FLOW 6: PROTECTED PAGE
   raw Cookie header count = 2
-  Cookie[0]: dbsc-registration-sessions-id=regid2
+  Cookie[0]: login_auth_id=login2
   Cookie[1]: __Host-auth_cookie=cookie4      ← the bound cookie, in a SECOND Cookie header
   authenticated=true
 ```
@@ -550,7 +552,7 @@ way." Where we differ, it's because **we simplified** or because we run on **loc
 
 | Aspect | Reference server | This project | Why we differ |
 |--------|------------------|--------------|---------------|
-| Correlation cookie `dbsc-registration-sessions-id` | Sets it in the form handler **and reads it** in `/register` to look up the pending session. | We **set it but don't read it** — `/register` just mints a fresh `session_identifier`. | Kept the demo minimal; correlation isn't needed when we create the session on the fly. |
+| Correlation cookie | Sets `dbsc-registration-sessions-id` in the form handler **and reads it** in `/register` to look up the pending session. | Sets `login_auth_id` (our stand-in name) but **doesn't read it** — `/register` just mints a fresh `session_identifier`. | Kept the demo minimal; correlation isn't needed when we create the session on the fly. |
 | JWT claim checks | Verifies signature **and** that `jti` == the issued challenge and `authorization` == the auth code. | We verify the **signature only** (log the claims). | Simpler to read; the signature is the core proof-of-possession. |
 | Enablement | Ships an **Origin-Trial token** (`origin-trial` header) valid for its real `deno.dev` domain. | Uses **Chrome testing flags** on `localhost`. | `localhost` can't carry a domain-bound OT token, so we take the flags door instead. |
 | Scope / cookie config | A form lets you set scope include/exclude paths, cookie name/value/lifetime at runtime. | **Hardcoded** (whole-origin scope, `auth_cookie`, 20s). | A hello-world doesn't need the knobs. |

@@ -5,3 +5,4 @@
 # Local-only deploy helpers (not part of the demo)
 deploy.sh
 run-devserver.sh
+public-repo/

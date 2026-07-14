@@ -237,13 +237,18 @@ fn registration_header() -> (HeaderName, HeaderValue) {
 }
 
 /// Step 1: the page's HTML <form> POSTs here. We reply with a 303 redirect back to `/`
-/// carrying `Secure-Session-Registration` plus a correlation cookie. This specific
-/// response shape (form POST → 303) is what Chrome acts on to start registration.
+/// carrying `Secure-Session-Registration` plus a cookie that stands in for the login. This
+/// specific response shape (form POST → 303) is what Chrome acts on to start registration.
 async fn start_form() -> Response {
     let _log = LOG_LOCK.lock().unwrap();
     let (reg_name, reg_value) = registration_header();
-    let reg_id = nonce("regid");
-    let set_cookie = format!("dbsc-registration-sessions-id={reg_id}; Path=/; Max-Age=3600");
+    // `login_auth_id` stands in for your real login/auth SESSION cookie: it's how the server
+    // will know *which logged-in user* the follow-up /dbsc/register POST belongs to. In a real
+    // app you don't set a separate cookie here — your existing login session cookie does this
+    // job (and rides the same-origin /register request automatically). This demo has no login,
+    // so we mint a placeholder. (We set it but don't actually read it — see README §3.)
+    let login_auth_id = nonce("login");
+    let set_cookie = format!("login_auth_id={login_auth_id}; Path=/; Max-Age=3600");
 
     flow_header(1, "TRIGGER  (POST /start-form)");
     println!("  REQUEST : POST /start-form   (HTML form submit; no body)");
