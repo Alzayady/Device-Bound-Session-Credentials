@@ -96,7 +96,7 @@ sequenceDiagram
     rect rgb(255, 245, 245)
     Note over W,S: App request
     W->>S: GET /api/protected (user clicks Call protected)
-    S-->>W: authenticated true  (bound cookie delivered; false only if no active session)
+    S-->>W: authenticated true  (bound cookie delivered, or false if no active session)
     end
 ```
 
