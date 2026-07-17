@@ -247,13 +247,18 @@ mkcert localhost 127.0.0.1 ::1        # -> localhost+2.pem / localhost+2-key.pem
 cargo run                              # https://localhost:3000
 ```
 
-Chrome (`chrome://flags`, then relaunch): **Device Bound Session Credentials (Standard)** →
-`Enabled – For developers`, and **UnexportableKeyService** (`#use-unexportable-key-service-in-browser-process`).
+Chrome (`chrome://flags`, then relaunch). On **macOS** these two flags are all that's required —
+set both to **Enabled**, nothing else:
+
+- **Device Bound Session Credentials (Standard)** → `Enabled`
+- **Enable UnexportableKeyService mojo service in the browser process**
+  (`#use-unexportable-key-service-in-browser-process`) → `Enabled`
+
 Open `https://localhost:3000`, DevTools → Network, and watch the terminal.
 
 **Config (env, defaults = local mkcert):** `DBSC_ORIGIN`, `DBSC_BIND`, `DBSC_TLS_CERT`, `DBSC_TLS_KEY`,
-`DBSC_COOKIE_NAME` (`__Host-auth_cookie`), `DBSC_COOKIE_MAX_AGE` (seconds, `300`; set `20` to watch
-refreshes quickly).
+`DBSC_COOKIE_NAME` (`__Host-auth_cookie`), `DBSC_COOKIE_MAX_AGE` (seconds, `20`; set `300` to keep
+the cookie present across clicks).
 
 **Endpoints:** `POST /start-form` (emits the registration invite — stands in for login),
 `POST /dbsc/register`, `POST /dbsc/refresh`, `GET /api/protected` (reports cookie delivery),

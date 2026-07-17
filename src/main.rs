@@ -48,17 +48,17 @@ struct Config {
     tls_cert: String,    // DBSC_TLS_CERT    — PEM cert path
     tls_key: String,     // DBSC_TLS_KEY     — PEM key path
     cookie_name: String, // DBSC_COOKIE_NAME — device-bound cookie name (default __Host-auth_cookie)
-    cookie_max_age: u64, // DBSC_COOKIE_MAX_AGE — bound-cookie lifetime in seconds (default 300)
+    cookie_max_age: u64, // DBSC_COOKIE_MAX_AGE — bound-cookie lifetime in seconds (default 20)
 }
 static CONFIG: OnceLock<Config> = OnceLock::new();
 fn cfg() -> &'static Config {
     CONFIG.get().expect("CONFIG not initialized (set in main before serving)")
 }
-/// Default bound-cookie lifetime, in SECONDS (RFC 6265 `Max-Age` is seconds, not ms). 300 (5 min)
-/// matches report-uri/dbsc-php and keeps the cookie reliably present when you click a protected page
-/// (a 20s cookie is often expired at click time). Override at runtime with `DBSC_COOKIE_MAX_AGE` —
-/// e.g. `DBSC_COOKIE_MAX_AGE=20` to force the *stale-cookie* case and watch refreshes fire.
-const COOKIE_MAX_AGE_SECS: u64 = 300;
+/// Default bound-cookie lifetime, in SECONDS (RFC 6265 `Max-Age` is seconds, not ms). 20s is the
+/// *stale-cookie* case: the cookie is often expired by the time you click a protected page, so you
+/// can watch DBSC refreshes fire. Override at runtime with `DBSC_COOKIE_MAX_AGE` — e.g.
+/// `DBSC_COOKIE_MAX_AGE=300` (5 min) to keep the cookie reliably present across clicks.
+const COOKIE_MAX_AGE_SECS: u64 = 20;
 /// Session (binding) lifetime — how long the server keeps the device binding. Tie this to your
 /// login/session TTL (e.g. a 30-day "remember me"). Independent of the short bound-cookie lifetime.
 const SESSION_TTL_SECS: u64 = 30 * 24 * 3600;
@@ -233,7 +233,7 @@ async fn main() {
     println!("\n=== DBSC hello-world (HTTPS) ===");
     println!("Open  {}  in Chrome (with the DBSC flags from README enabled).", cfg().origin);
     println!(
-        "Bound-cookie Max-Age = {}s  (set DBSC_COOKIE_MAX_AGE to change; e.g. 20 to force refreshes).",
+        "Bound-cookie Max-Age = {}s  (set DBSC_COOKIE_MAX_AGE to change; e.g. 300 to keep it present across clicks).",
         cfg().cookie_max_age
     );
     println!("Keep DevTools -> Network open to watch the Secure-Session-* handshake.\n");
